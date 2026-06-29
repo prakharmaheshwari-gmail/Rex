@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>National Real Estate Exchange</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        ::-webkit-scrollbar { width: 0px; background: transparent; }
+        .slide-up { animation: slideUp 0.3s ease-out forwards; }
+        @keyframes slideUp {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .line-clamp-2 {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;  
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body class="bg-gray-200 flex items-center justify-center min-h-screen p-4">
+
+<div id="root"></div>
+
+<script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    const ALL_CITIES = ['Indore', 'Mumbai', 'Bharuch', 'Ujjain', 'Jaipur'];
+    const MAX_PROPERTY_SUPPLY = 100000; // Hardcap at 100,000 sq.ft per property
+    const CITY_UNLOCK_FEE = 50000;
+
+    // --- 1. EXPANDED NATIONAL MARKET DATA ---
+    const INITIAL_PROPERTIES = [
+        // INDORE
+        { id: 1, city: 'Indore', name: "Super Corridor Tech Park", locality: "Super Corridor", basePrice: 8500, change: 2.5, description: "Premium Grade-A commercial office space opposite the new TCS campus." },
+        { id: 2, city: 'Indore', name: "Nipania Golf Villas", locality: "Nipania", basePrice: 12000, change: -1.2, description: "Ultra-luxury gated community featuring independent smart-homes and golf course views." },
+        { id: 3, city: 'Indore', name: "Vijay Nagar Retail", locality: "Vijay Nagar", basePrice: 15500, change: 0.8, description: "High-visibility retail shop spaces in Indore's most premium commercial district." },
+        // MUMBAI
+        { id: 4, city: 'Mumbai', name: "BKC Commercial Hub", locality: "Bandra Kurla Complex", basePrice: 45000, change: 1.2, description: "India's premier financial district. High-yield corporate leases." },
+        { id: 5, city: 'Mumbai', name: "Worli Sea Face Luxury", locality: "Worli", basePrice: 65000, change: -0.8, description: "Sea-facing ultra-luxury high-rise apartments catering to HNWIs." },
+        // BHARUCH
+        { id: 6, city: 'Bharuch', name: "Dahej Industrial Zone", locality: "Dahej", basePrice: 2500, change: 3.5, description: "Heavy industrial and chemical manufacturing plots in the PCPIR region." },
+        { id: 7, city: 'Bharuch', name: "Zadeshwar Road Retail", locality: "Zadeshwar", basePrice: 4200, change: 0.4, description: "Growing commercial strip catering to the expanding residential population." },
+        // UJJAIN
+        { id: 8, city: 'Ujjain', name: "Mahakal Corridor Commercial", locality: "Mahakal Lok", basePrice: 8500, change: 6.2, description: "Extremely high-footfall tourist and hospitality zones near the temple corridor." },
+        { id: 9, city: 'Ujjain', name: "Freeganj Residential", locality: "Freeganj", basePrice: 3800, change: 1.1, description: "Established residential plots in the heart of Ujjain city." },
+        // JAIPUR
+        { id: 10, city: 'Jaipur', name: "Malviya Nagar Tech Park", locality: "Malviya Nagar", basePrice: 7200, change: 2.1, description: "Modern IT and BPO office spaces with excellent city connectivity." },
+        { id: 11, city: 'Jaipur', name: "C-Scheme Business Center", locality: "C-Scheme", basePrice: 12500, change: -0.3, description: "Premium corporate offices in Jaipur's most affluent commercial neighborhood." }
+    ];
+
+    // --- 2. MAIN APP COMPONENT ---
+    function App() {
+        const [activeTab, setActiveTab] = useState('Market');
+        const [balance, setBalance] = useState(1000000000);
+        const [portfolio, setPortfolio] = useState({}); 
+        const [logs, setLogs] = useState([]);
+        const [watchlist, setWatchlist] = useState([1, 4]); 
+        
+        // Dynamic Market State
+        const [marketData, setMarketData] = useState(INITIAL_PROPERTIES.map(p => ({
+            ...p,
+            bid: Math.floor(p.basePrice * 0.99), 
+            ask: Math.ceil(p.basePrice * 1.01)   
+        })));
+
+        // Location & Unlock State
+        const [ipAddress, setIpAddress] = useState('Fetching IP...');
+        const [deviceId, setDeviceId] = useState('');
+        const [unlockedCities, setUnlockedCities] = useState(['Indore']); // Default fallback
+        const [activeCity, setActiveCity] = useState('Indore');
+        const [showUnlockMenu, setShowUnlockMenu] = useState(false);
+
+        // Trade Sheet State
+        const [selectedProperty, setSelectedProperty] = useState(null);
+        const [tradeType, setTradeType] = useState('BUY'); 
+        const [tradeQty, setTradeQty] = useState(0);
+
+        // --- INITIALIZATION (Geolocation & ID) ---
+        useEffect(() => {
+            // Fetch IP and Geo-location
+            fetch('https://ipapi.co/json/')
+                .then(res => res.json())
+                .then(data => {
+                    setIpAddress(data.ip || 'Unknown');
+                    const detectedCity = data.city;
+                    // If their real city is in our database, make it their free home city
+                    if (ALL_CITIES.includes(detectedCity)) {
+                        setUnlockedCities([detectedCity]);
+                        setActiveCity(detectedCity);
+                    }
+                })
+                .catch(() => setIpAddress('Network Offline'));
+
+            // Device ID simulation
+            const storedId = localStorage.getItem('indore_beta_uuid');
+            if (storedId) {
+                setDeviceId(storedId);
+            } else {
+                const newId = 'AND-' + Math.random().toString(36).substring(2, 15).toUpperCase();
+                localStorage.setItem('indore_beta_uuid', newId);
+                setDeviceId(newId);
+            }
+        }, []);
+
+        // --- CALCULATION ENGINE ---
+        const netWorth = useMemo(() => {
+            let nw = balance;
+            Object.keys(portfolio).forEach(id => {
+                const prop = marketData.find(p => p.id == id);
+                nw += (portfolio[id] * prop.bid);
+            });
+            return nw;
+        }, [balance, portfolio, marketData]);
+
+        const toggleWatchlist = (e, id) => {
+            e.stopPropagation(); 
+            setWatchlist(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
+        };
+
+        // --- CITY UNLOCK LOGIC ---
+        const handleUnlockCity = (city) => {
+            if (balance >= CITY_UNLOCK_FEE) {
+                setBalance(b => b - CITY_UNLOCK_FEE);
+                setUnlockedCities(prev => [...prev, city]);
+                setActiveCity(city);
+                setLogs(l => [{ id: Date.now(), type: 'FEE', prop: `${city} Market License`, qty: 0, price: CITY_UNLOCK_FEE, total: CITY_UNLOCK_FEE, time: new Date().toLocaleTimeString() }, ...l]);
+                setShowUnlockMenu(false);
+            } else {
+                alert(`You need ${CITY_UNLOCK_FEE.toLocaleString()} points to unlock this city.`);
+            }
+        };
+
+        // --- TRADING & PRICE IMPACT ENGINE ---
+        const executeTrade = () => {
+            if (!selectedProperty || tradeQty <= 0) return;
+            
+            const isBuy = tradeType === 'BUY';
+            const executionPrice = isBuy ? selectedProperty.ask : selectedProperty.bid;
+            const totalCost = executionPrice * tradeQty;
+            const currentOwned = portfolio[selectedProperty.id] || 0;
+
+            if (isBuy) {
+                if (currentOwned + tradeQty > MAX_PROPERTY_SUPPLY) {
+                    alert(`Supply Cap Reached: You cannot own more than ${MAX_PROPERTY_SUPPLY.toLocaleString()} sq.ft of this property.`);
+                    return;
+                }
+                if (balance >= totalCost) {
+                    setBalance(b => b - totalCost);
+                    setPortfolio(p => ({ ...p, [selectedProperty.id]: currentOwned + tradeQty }));
+                    setLogs(l => [{ id: Date.now(), type: 'BUY', prop: selectedProperty.name, qty: tradeQty, price: executionPrice, total: totalCost, time: new Date().toLocaleTimeString() }, ...l]);
+                    applyPriceImpact(selectedProperty.id, tradeQty, true);
+                    closeSheet();
+                } else {
+                    alert("Insufficient Points!");
+                }
+            } else {
+                if (currentOwned >= tradeQty) {
+                    setBalance(b => b + totalCost);
+                    setPortfolio(p => {
+                        const updated = { ...p, [selectedProperty.id]: currentOwned - tradeQty };
+                        if (updated[selectedProperty.id] <= 0) delete updated[selectedProperty.id];
+                        return updated;
+                    });
+                    setLogs(l => [{ id: Date.now(), type: 'SELL', prop: selectedProperty.name, qty: tradeQty, price: executionPrice, total: totalCost, time: new Date().toLocaleTimeString() }, ...l]);
+                    applyPriceImpact(selectedProperty.id, tradeQty, false);
+                    closeSheet();
+                } else {
+                    alert("You don't own enough square footage!");
+                }
+            }
+        };
+
+        const applyPriceImpact = (id, qty, isBuy) => {
+            setMarketData(prevData => prevData.map(prop => {
+                if (prop.id !== id) return prop;
+                const shift = Math.max(1, Math.floor(qty / 200)); 
+                const newBase = isBuy ? prop.basePrice + shift : Math.max(100, prop.basePrice - shift);
+                return {
+                    ...prop,
+                    basePrice: newBase,
+                    bid: Math.floor(newBase * 0.99),
+                    ask: Math.ceil(newBase * 1.01),
+                    change: parseFloat(((newBase - INITIAL_PROPERTIES.find(p=>p.id===id).basePrice) / INITIAL_PROPERTIES.find(p=>p.id===id).basePrice * 100).toFixed(2))
+                };
+            }));
+            
+            setSelectedProperty(prev => {
+                if (!prev || prev.id !== id) return prev;
+                const shift = Math.max(1, Math.floor(qty / 200));
+                const newBase = isBuy ? prev.basePrice + shift : Math.max(100, prev.basePrice - shift);
+                return { ...prev, basePrice: newBase, bid: Math.floor(newBase * 0.99), ask: Math.ceil(newBase * 1.01) };
+            });
+        };
+
+        const closeSheet = () => {
+            setSelectedProperty(null);
+            setTradeQty(0);
+        };
+
+        // --- COMPONENTS ---
+        const PropertyCard = ({ prop }) => {
+            const isWatched = watchlist.includes(prop.id);
+            const owned = portfolio[prop.id] || 0;
+            const availableSupply = MAX_PROPERTY_SUPPLY - owned;
+
+            return (
+                <div onClick={() => { setSelectedProperty(prop); setTradeType('BUY'); setTradeQty(0); }} 
+                     className="bg-white p-4 rounded-2xl shadow-sm mb-4 cursor-pointer hover:bg-gray-50 active:scale-95 transition-transform border border-gray-100 relative overflow-hidden">
+                    
+                    {/* Supply Progress Bar Overlay */}
+                    <div className="absolute bottom-0 left-0 h-1 bg-blue-100 w-full">
+                        <div className="h-full bg-blue-500" style={{ width: `${(owned / MAX_PROPERTY_SUPPLY) * 100}%` }}></div>
+                    </div>
+
+                    <div className="flex justify-between items-start mb-2 border-b border-gray-100 pb-2">
+                        <div className="flex-1 pr-3">
+                            <h3 className="font-bold text-gray-900 text-sm leading-tight">{prop.name}</h3>
+                            <p className="text-xs text-blue-600 font-semibold"><i className="fas fa-map-marker-alt mr-1"></i>{prop.locality}, {prop.city}</p>
+                        </div>
+                        <div onClick={(e) => toggleWatchlist(e, prop.id)} className="p-2 -mr-2 -mt-2 cursor-pointer z-10">
+                            <i className={`text-lg ${isWatched ? 'fas fa-star text-yellow-400' : 'far fa-star text-gray-300'}`}></i>
+                        </div>
+                    </div>
+                    
+                    <div className="flex justify-between items-center mb-3">
+                        <p className="text-[11px] text-gray-500 line-clamp-2 leading-tight flex-1 pr-2">{prop.description}</p>
+                        <div className="text-right shrink-0">
+                            <p className="text-[9px] font-bold text-gray-400 uppercase">Available</p>
+                            <p className="text-xs font-bold text-gray-800">{availableSupply >= 1000 ? (availableSupply/1000).toFixed(1) + 'k' : availableSupply} sq.ft</p>
+                        </div>
+                    </div>
+                    
+                    <div className="flex justify-between items-end bg-gray-50 rounded-lg p-2">
+                        <div className="w-1/2 pr-2 border-r border-gray-200">
+                            <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">BID (Sell)</p>
+                            <p className="font-bold text-sm text-red-600">{prop.bid.toLocaleString()} <span className="text-[9px] text-gray-500 font-normal">pts</span></p>
+                        </div>
+                        <div className="w-1/2 pl-3 text-right">
+                            <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-1">ASK (Buy)</p>
+                            <p className="font-bold text-sm text-green-600">{prop.ask.toLocaleString()} <span className="text-[9px] text-gray-500 font-normal">pts</span></p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- MAIN RENDER ---
+        return (
+            <div className="w-full max-w-[400px] h-[800px] bg-gray-50 rounded-[3rem] shadow-2xl border-[8px] border-gray-900 overflow-hidden relative flex flex-col font-sans text-gray-800">
+                
+                {/* STATUS BAR */}
+                <div className="w-full h-7 bg-gray-900 flex justify-between items-center px-6 text-xs text-white shrink-0">
+                    <span>9:41</span>
+                    <div className="flex gap-2">
+                        <i className="fas fa-signal"></i>
+                        <i className="fas fa-wifi"></i>
+                        <i className="fas fa-battery-full"></i>
+                    </div>
+                </div>
+
+                {/* HEADER: GLOBAL IP ADDRESS */}
+                <div className="w-full bg-gray-800 text-center py-1 shrink-0 border-t border-gray-700">
+                    <p className="text-[10px] text-gray-300 font-mono tracking-widest uppercase">
+                        Location IP: <span className="text-white font-bold">{ipAddress}</span>
+                    </p>
+                </div>
+
+                {/* MAIN CONTENT AREA */}
+                <div className="flex-1 overflow-y-auto pb-[90px]">
+                    
+                    {/* VIEW: MARKET */}
+                    {activeTab === 'Market' && (
+                        <div className="animate-fade-in">
+                            <div className="bg-blue-600 text-white p-6 shadow-md border-b-4 border-blue-800">
+                                <p className="text-sm opacity-80">Available Cash</p>
+                                <h1 className="text-4xl font-bold mt-1">{balance.toLocaleString()}</h1>
+                            </div>
+                            
+                            {/* City Dropdown Controls */}
+                            <div className="px-4 pt-4 pb-2 bg-white shadow-sm border-b border-gray-200 sticky top-0 z-10 flex gap-2">
+                                <select 
+                                    value={activeCity} 
+                                    onChange={(e) => setActiveCity(e.target.value)}
+                                    className="flex-1 bg-gray-100 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 font-bold"
+                                >
+                                    {unlockedCities.map(city => <option key={city} value={city}>📍 {city} Market</option>)}
+                                </select>
+                                
+                                {unlockedCities.length < ALL_CITIES.length && (
+                                    <button onClick={() => setShowUnlockMenu(true)} className="bg-purple-100 text-purple-700 px-3 py-2 rounded-lg font-bold text-xs shrink-0 flex items-center shadow-sm">
+                                        <i className="fas fa-unlock mr-1"></i> Unlock
+                                    </button>
+                                )}
+                            </div>
+
+                            <div className="p-4">
+                                {marketData.filter(p => p.city === activeCity).map(prop => <PropertyCard key={prop.id} prop={prop} />)}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* VIEW: WATCHLIST */}
+                    {activeTab === 'Watchlist' && (
+                        <div className="animate-fade-in">
+                            <div className="bg-yellow-500 text-white p-6 shadow-md border-b-4 border-yellow-600 flex items-center justify-between">
+                                <div>
+                                    <h1 className="text-2xl font-bold mt-1">Watchlist</h1>
+                                    <p className="text-sm opacity-90">{watchlist.length} Properties Tracked</p>
+                                </div>
+                                <i className="fas fa-star text-4xl opacity-50"></i>
+                            </div>
+                            <div className="p-4">
+                                {watchlist.length === 0 ? (
+                                    <div className="text-center text-gray-400 mt-10">
+                                        <i className="far fa-star text-2xl mb-3"></i>
+                                        <p>Tap the star on any property to track it.</p>
+                                    </div>
+                                ) : (
+                                    marketData.filter(p => watchlist.includes(p.id)).map(prop => <PropertyCard key={prop.id} prop={prop} />)
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* VIEW: PORTFOLIO */}
+                    {activeTab === 'Portfolio' && (
+                        <div className="animate-fade-in">
+                            <div className="bg-purple-700 text-white p-6 shadow-md border-b-4 border-purple-900">
+                                <p className="text-sm opacity-80 flex justify-between">Total Net Worth <i className="fas fa-info-circle opacity-50"></i></p>
+                                <h1 className="text-4xl font-bold mt-1">{netWorth.toLocaleString()}</h1>
+                                <p className="text-sm opacity-80 mt-2">Liquid Cash: {balance.toLocaleString()} pts</p>
+                            </div>
+                            <div className="p-4">
+                                <h2 className="text-lg font-bold mb-4 text-gray-700">My Holdings</h2>
+                                {Object.keys(portfolio).length === 0 ? (
+                                    <div className="text-center text-gray-400 mt-10">
+                                        <i className="fas fa-building text-2xl mb-3"></i>
+                                        <p>You don't own any property yet.</p>
+                                    </div>
+                                ) : (
+                                    Object.keys(portfolio).map(id => {
+                                        const prop = marketData.find(p => p.id == id);
+                                        const qty = portfolio[id];
+                                        const val = qty * prop.bid; 
+                                        return (
+                                            <div key={id} onClick={() => { setSelectedProperty(prop); setTradeType('SELL'); setTradeQty(0); }} 
+                                                 className="bg-white p-4 rounded-2xl shadow-sm mb-3 flex justify-between items-center cursor-pointer hover:bg-gray-50 active:scale-95 transition-transform border border-gray-100">
+                                                <div>
+                                                    <h3 className="font-bold text-gray-900">{prop.name}</h3>
+                                                    <div className="flex items-center mt-1 gap-2">
+                                                        <span className="bg-purple-100 text-purple-700 text-xs font-bold px-2 py-1 rounded">
+                                                            {qty.toLocaleString()} / {MAX_PROPERTY_SUPPLY.toLocaleString()} sq.ft
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="font-bold text-gray-900">{val.toLocaleString()} pts</p>
+                                                    <p className="text-[10px] text-gray-500 font-medium">BID @ {prop.bid.toLocaleString()}</p>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* VIEW: ACTIVITY */}
+                    {activeTab === 'Activity' && (
+                        <div className="p-4 animate-fade-in">
+                            <h2 className="text-2xl font-bold mb-4 text-gray-800 pt-4">Trade Ledger</h2>
+                            {logs.length === 0 ? (
+                                <p className="text-center text-gray-400 mt-10">No transactions recorded.</p>
+                            ) : (
+                                logs.map(log => (
+                                    <div key={log.id} className="bg-white p-4 rounded-2xl shadow-sm mb-3 border-l-4" style={{ borderColor: log.type === 'BUY' ? '#16a34a' : (log.type === 'SELL' ? '#dc2626' : '#a855f7') }}>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <span className={`font-bold text-sm px-2 py-1 rounded bg-opacity-20 ${log.type === 'BUY' ? 'text-green-700 bg-green-100' : (log.type === 'SELL' ? 'text-red-700 bg-red-100' : 'text-purple-700 bg-purple-100')}`}>
+                                                {log.type === 'FEE' ? 'LICENSE FEE' : `${log.type} ${log.qty.toLocaleString()} sq.ft`}
+                                            </span>
+                                            <span className="text-xs text-gray-400 font-medium">{log.time}</span>
+                                        </div>
+                                        <p className="text-gray-800 font-bold text-sm mt-2">{log.prop}</p>
+                                        <div className="flex justify-between items-end mt-1">
+                                            <p className="text-xs text-gray-500 font-medium">{log.type === 'FEE' ? 'Market Access Purchase' : `Executed @ ${log.price.toLocaleString()} pts / sq.ft`}</p>
+                                            <p className="text-sm font-bold text-gray-900">-{log.total.toLocaleString()} pts</p>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* BOTTOM NAVIGATION WRAPPER */}
+                <div className="absolute bottom-0 w-full bg-white border-t border-gray-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] flex flex-col z-20">
+                    <div className="flex justify-around items-center h-[60px] px-1">
+                        <button onClick={() => setActiveTab('Market')} className={`flex flex-col items-center w-16 transition-colors ${activeTab === 'Market' ? 'text-blue-600' : 'text-gray-400'}`}>
+                            <i className="fas fa-chart-line text-xl mb-1"></i>
+                            <span className="text-[9px] font-semibold">Market</span>
+                        </button>
+                        <button onClick={() => setActiveTab('Watchlist')} className={`flex flex-col items-center w-16 transition-colors ${activeTab === 'Watchlist' ? 'text-yellow-500' : 'text-gray-400'}`}>
+                            <i className="fas fa-star text-xl mb-1"></i>
+                            <span className="text-[9px] font-semibold">Watchlist</span>
+                        </button>
+                        <button onClick={() => setActiveTab('Portfolio')} className={`flex flex-col items-center w-16 transition-colors ${activeTab === 'Portfolio' ? 'text-purple-600' : 'text-gray-400'}`}>
+                            <i className="fas fa-wallet text-xl mb-1"></i>
+                            <span className="text-[9px] font-semibold">Portfolio</span>
+                        </button>
+                        <button onClick={() => setActiveTab('Activity')} className={`flex flex-col items-center w-16 transition-colors ${activeTab === 'Activity' ? 'text-gray-800' : 'text-gray-400'}`}>
+                            <i className="fas fa-receipt text-xl mb-1"></i>
+                            <span className="text-[9px] font-semibold">Ledger</span>
+                        </button>
+                    </div>
+
+                    {/* FOOTER: UNIQUE DEVICE ID */}
+                    <div className="w-full bg-gray-100 text-center py-1">
+                        <p className="text-[9px] text-gray-500 font-mono tracking-wide uppercase">
+                            Secure ID: <span className="font-bold text-gray-700">{deviceId}</span>
+                        </p>
+                    </div>
+                </div>
+
+                {/* MARKET UNLOCK MODAL */}
+                {showUnlockMenu && (
+                    <div className="absolute inset-0 bg-black/60 z-50 flex flex-col justify-end backdrop-blur-sm">
+                        <div className="flex-1 w-full" onClick={() => setShowUnlockMenu(false)}></div>
+                        <div className="bg-white w-full rounded-t-3xl p-6 slide-up shadow-[0_-10px_20px_rgba(0,0,0,0.2)]">
+                            <div className="flex justify-between items-center mb-6">
+                                <h2 className="text-2xl font-bold text-gray-900">Unlock Markets</h2>
+                                <button onClick={() => setShowUnlockMenu(false)} className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center text-gray-500"><i className="fas fa-times"></i></button>
+                            </div>
+                            <p className="text-gray-500 text-sm mb-4">Pay a one-time fee of <span className="font-bold text-purple-700">50,000 pts</span> per city to unlock trading access.</p>
+                            
+                            <div className="space-y-3 mb-6 max-h-[300px] overflow-y-auto">
+                                {ALL_CITIES.filter(c => !unlockedCities.includes(c)).map(city => (
+                                    <div key={city} className="flex justify-between items-center p-4 border border-gray-200 rounded-xl bg-gray-50">
+                                        <div>
+                                            <h3 className="font-bold text-gray-900">{city}</h3>
+                                            <p className="text-xs text-gray-500"><i className="fas fa-lock mr-1 text-gray-400"></i> Locked</p>
+                                        </div>
+                                        <button onClick={() => handleUnlockCity(city)} className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow hover:bg-purple-700">
+                                            Pay 50k
+                                        </button>
+                                    </div>
+                                ))}
+                                {ALL_CITIES.filter(c => !unlockedCities.includes(c)).length === 0 && (
+                                    <p className="text-center text-green-600 font-bold py-4">All markets unlocked!</p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* TRADING BOTTOM SHEET OVERLAY */}
+                {selectedProperty && (() => {
+                    const currentOwned = portfolio[selectedProperty.id] || 0;
+                    const maxAvailableToBuy = MAX_PROPERTY_SUPPLY - currentOwned;
+
+                    return (
+                        <div className="absolute inset-0 bg-black/60 z-50 flex flex-col justify-end backdrop-blur-sm">
+                            <div className="flex-1 w-full" onClick={closeSheet}></div>
+                            <div className="bg-white w-full rounded-t-3xl p-6 slide-up shadow-[0_-10px_20px_rgba(0,0,0,0.2)]">
+                                
+                                <div className="flex justify-between items-start mb-4">
+                                    <div className="pr-4">
+                                        <h2 className="text-xl font-bold text-gray-900 leading-tight">{selectedProperty.name}</h2>
+                                        <div className="flex gap-4 mt-2">
+                                            <p className="text-red-600 font-bold text-xs uppercase tracking-wide">Bid: {selectedProperty.bid.toLocaleString()}</p>
+                                            <p className="text-green-600 font-bold text-xs uppercase tracking-wide">Ask: {selectedProperty.ask.toLocaleString()}</p>
+                                        </div>
+                                    </div>
+                                    <button onClick={closeSheet} className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center text-gray-500 hover:bg-gray-200 shrink-0">
+                                        <i className="fas fa-times"></i>
+                                    </button>
+                                </div>
+
+                                {/* Buy / Sell Toggle */}
+                                <div className="flex bg-gray-100 p-1 rounded-xl mb-4 relative">
+                                    <button onClick={() => { setTradeType('BUY'); setTradeQty(0); }} className={`flex-1 py-2 rounded-lg font-bold text-sm transition-all ${tradeType === 'BUY' ? 'bg-green-600 text-white shadow' : 'text-gray-500'}`}>BUY (Pay Ask)</button>
+                                    <button onClick={() => { setTradeType('SELL'); setTradeQty(0); }} className={`flex-1 py-2 rounded-lg font-bold text-sm transition-all ${tradeType === 'SELL' ? 'bg-red-600 text-white shadow' : 'text-gray-500'}`}>SELL (Take Bid)</button>
+                                </div>
+
+                                {/* Supply Data Notice */}
+                                <div className="bg-gray-50 text-gray-600 text-[11px] font-semibold p-2 rounded-lg flex justify-between mb-4 border border-gray-200">
+                                    <span>You Own: <span className="text-purple-600">{currentOwned.toLocaleString()} sq.ft</span></span>
+                                    <span>Limit: <span className="text-gray-900">{MAX_PROPERTY_SUPPLY.toLocaleString()} sq.ft</span></span>
+                                </div>
+
+                                {/* Quantity Input Section */}
+                                <p className="text-center text-gray-500 text-sm font-semibold mb-1">Area to Trade (sq.ft)</p>
+                                <h3 className="text-center text-5xl font-bold text-gray-900 mb-6">{tradeQty.toLocaleString()}</h3>
+
+                                <div className="grid grid-cols-4 gap-2 mb-6">
+                                    <button onClick={() => setTradeQty(q => q + 10)} className="bg-gray-100 py-3 rounded-xl font-bold text-gray-700 active:bg-gray-200">+10</button>
+                                    <button onClick={() => setTradeQty(q => q + 100)} className="bg-gray-100 py-3 rounded-xl font-bold text-gray-700 active:bg-gray-200">+100</button>
+                                    <button onClick={() => setTradeQty(q => q + 1000)} className="bg-gray-100 py-3 rounded-xl font-bold text-gray-700 active:bg-gray-200">+1k</button>
+                                    <button onClick={() => {
+                                        if(tradeType === 'BUY') {
+                                            const affordable = Math.floor(balance / selectedProperty.ask);
+                                            setTradeQty(Math.min(affordable, maxAvailableToBuy));
+                                        }
+                                        if(tradeType === 'SELL') setTradeQty(currentOwned);
+                                    }} className="bg-gray-900 text-white py-3 rounded-xl font-bold active:bg-gray-700 text-sm tracking-wider">MAX</button>
+                                </div>
+
+                                <div className="flex justify-between items-center mb-6 pt-4 border-t border-gray-100">
+                                    <span className="text-gray-500 font-bold uppercase text-xs tracking-wider">Total Valuation</span>
+                                    <span className="text-xl font-black text-gray-900">{(tradeQty * (tradeType === 'BUY' ? selectedProperty.ask : selectedProperty.bid)).toLocaleString()} pts</span>
+                                </div>
+
+                                <button onClick={executeTrade} disabled={tradeQty === 0 || (tradeType === 'BUY' && tradeQty > maxAvailableToBuy)} 
+                                        className={`w-full py-4 rounded-2xl font-bold text-lg text-white transition-all shadow-lg
+                                        ${(tradeQty === 0 || (tradeType === 'BUY' && tradeQty > maxAvailableToBuy)) ? 'bg-gray-300 shadow-none cursor-not-allowed' : (tradeType === 'BUY' ? 'bg-green-600 active:bg-green-700 shadow-green-600/30' : 'bg-red-600 active:bg-red-700 shadow-red-600/30')}`}>
+                                    {tradeType === 'BUY' && tradeQty > maxAvailableToBuy ? 'EXCEEDS SUPPLY CAP' : `CONFIRM ${tradeType}`}
+                                </button>
+                            </div>
+                        </div>
+                    );
+                })()}
+            </div>
+        );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+</script>
+</body>
+</html>
